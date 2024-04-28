@@ -20,7 +20,7 @@ article_titles = []
 article_contents = []
 
 # Get a list of all Wikipedia article titles
-url = "https://en.wikipedia.org/w/api.php?action=query&format=json&list=search&srsearch=turing"
+url = "https://en.wikipedia.org/w/api.php?action=query&format=json&list=search&srsearch=ecosystem-architecture"
 response = requests.get(url)
 data = response.json()
 

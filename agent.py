@@ -9,6 +9,7 @@ from MilvusRM import MilvusRM
 from dspy.datasets import HotPotQA
 from dsp import LM
 import dspy
+from tweet import tweepty_client
 
 from watsonxModel import watsonx
 
@@ -22,7 +23,7 @@ class GenerateAnswer(dspy.Signature):
 
     context = dspy.InputField(desc="may contain relevant facts")
     question = dspy.InputField()
-    answer = dspy.OutputField(prefix="Reasoning: Let's think step by step.",desc="often between 10 and 20 words")
+    answer = dspy.OutputField(prefix="Reasoning: Let's think step by step. Give a complete final answer of at least a couple of sentences",desc="give a complete answer of at least a couple of sentences")
 
 class RAG(dspy.Module):
     def __init__(self, num_passages=3):
@@ -37,15 +38,10 @@ class RAG(dspy.Module):
         return dspy.Prediction(context=context, answer=prediction.answer) 
 
 # Uncompiled module prediction
-answer = dspy.Predict(GenerateAnswer)(context="", question="Who is Alan Turing?")
-print(answer)
+#answer = dspy.Predict(GenerateAnswer)(context="", question="How do I go about designing an ecosystems architecture?")
+#print(answer)
 
-# Load the dataset
-dataset = HotPotQA(train_seed=1, train_size=20, eval_seed=2023, dev_size=50, test_size=0)
-# Tell DSPy that the 'question' field is the input. Any other fields are labels and/or metadata.
-trainset = [x.with_inputs('question') for x in dataset.train]
-devset = [x.with_inputs('question') for x in dataset.dev]
-len(trainset), len(devset)
+
 
 #def metric(example: dspy.Example, prediction, trace=None):
 #        
@@ -92,13 +88,27 @@ def validate_context_and_answer(example, pred, trace=None):
 # Set up a basic teleprompter, which will compile our RAG program.
 teleprompter = BootstrapFewShot(metric=validate_context_and_answer)
 
-# Compile the RAG program
+dataset = HotPotQA(train_seed=1, train_size=20, eval_seed=2023, dev_size=50, test_size=0)
+# Tell DSPy that the 'question' field is the input. Any other fields are labels and/or metadata.
+trainset = [x.with_inputs('question') for x in dataset.train]
+devset = [x.with_inputs('question') for x in dataset.dev]
+len(trainset), len(devset)
+
+print(trainset)
+
+# 2. Recompile the RAG program
 compiled_rag = teleprompter.compile(student=RAG(), trainset=trainset)
 
 # Compiled module prediction
-answer = dspy.Predict(GenerateAnswer)(context="",question="Who is Alan Turing?")
+answer = dspy.Predict(GenerateAnswer)(context="", question="How do I go about designing an ecosystems architecture?")
 print(answer)
+
+#watsonx.inspect_history(n=3)
+
+#response = tweepty_client.create_tweet(
+#    text="This Tweet was Tweeted using Tweepy and Twitter API v2!"
+#)
+#print(f"https://twitter.com/user/status/{response.data['id']}")
 
 #dspy.candidate_programs
 
-#compiled_rag.inspect_history(n=3)

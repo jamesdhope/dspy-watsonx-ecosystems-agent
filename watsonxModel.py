@@ -81,4 +81,4 @@ def generate_access_token(api_key):
 
 token = generate_access_token(os.environ['WATSONX_APIKEY'])
 
-watsonx = Watson(model="meta-llama/llama-2-70b-chat",api_key=token)
+watsonx = Watson(model="meta-llama/llama-3-70b-instruct",api_key=token)
