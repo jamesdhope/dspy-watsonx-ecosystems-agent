@@ -1,3 +1,8 @@
+import os
+# Use the package we installed
+from slack_bolt import App
+from watsonxModel import Watson, generate_access_token
+import os
 import dspy
 from dsp.utils import deduplicate
 from dspy.datasets import HotPotQA
@@ -9,11 +14,11 @@ from MilvusRM import MilvusRM
 from dspy.datasets import HotPotQA
 from dsp import LM
 import dspy
-from tweet import tweepty_client
 
-from watsonxModel import watsonx
+token = generate_access_token(os.environ['WATSONX_APIKEY'])
+watsonx = Watson(model="meta-llama/llama-3-70b-instruct",api_key=token)
 
-dspy.settings.configure(lm=watsonx, trace=[], temperature=0.7)
+dspy.settings.configure(lm=watsonx, trace=[])
 retriever_model = MilvusRM(collection_name="wikipedia_articles",uri="http://localhost:19530")
 dspy.settings.configure(rm=retriever_model)
 
@@ -23,7 +28,7 @@ class GenerateAnswer(dspy.Signature):
 
     context = dspy.InputField(desc="may contain relevant facts")
     question = dspy.InputField()
-    answer = dspy.OutputField(prefix="Reasoning: Let's think step by step. Give a complete final answer of at least a couple of sentences",desc="give a complete answer of at least a couple of sentences")
+    answer = dspy.OutputField(prefix="Reasoning: Let's think step by step but give a complete final answer of at least a couple of sentences",desc="give a complete answer of at least a couple of sentences")
 
 class RAG(dspy.Module):
     def __init__(self, num_passages=3):
@@ -37,78 +42,68 @@ class RAG(dspy.Module):
         prediction = self.generate_answer(context=context, question=question)
         return dspy.Prediction(context=context, answer=prediction.answer) 
 
-# Uncompiled module prediction
-#answer = dspy.Predict(GenerateAnswer)(context="", question="How do I go about designing an ecosystems architecture?")
-#print(answer)
+# Initialize your app with your bot token and signing secret
+app = App(
+    token="xoxb-7057314946368-7057368175488-H8RZtw3gfeayJVkm2fi9OiVh",
+    signing_secret="7ffa54b4f54f481671440f40f6ff3c18"
+)
 
+rag = RAG()
 
+@app.message("knock knock")
+def ask_who(message, say):
+    say("_Who's there?_")
 
-#def metric(example: dspy.Example, prediction, trace=None):
-#        
-#    transcript, answer, summary = example.transcript, example.summary, prediction.summary
-#    
-#    with dspy.context(lm=watsonx):
-#        # This next line is the one that results in the error when called from the optimizer.
-#        content_eval = dspy.Predict(Assess)(summary=summary, assessment_question=\
-#                            f"Is the assessed text a good summary of this transcript, capturing all the important details?\n\n{transcript}?")
-#    return content_eval.to_lower().endswith('yes')
+@app.event("message")
+def handle_message_events(event, say):
+    # Check if the message is not from a bot
+    if 'bot_id' not in event:
+        # Get the channel ID and message text
+        channel = event['channel']
+        text = event['text']
+        answer = rag(text)
+        #print("answer2",answer)
+        say(answer.answer)
 
-# Define the signature for automatic assessments.
-#class Assess(dspy.Signature):
-#    """Assess the quality of a tweet along the specified dimension."""
+# New functionality
+@app.event("app_home_opened")
+def update_home_tab(client, event, logger):
+  try:
+    # views.publish is the method that your app uses to push a view to the Home tab
+    client.views_publish(
+      # the user that opened your app's app home
+      user_id=event["user"],
+      # the view object that appears in the app home
+      view={
+        "type": "home",
+        "callback_id": "home_view",
 
-#    assessed_text = dspy.InputField()
-#    assessment_question = dspy.InputField()
-#    assessment_answer = dspy.OutputField(desc="Yes or No")
+        # body of the view
+        "blocks": [
+          {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": "*Welcome to DSPy AI Agent Home tab_* :tada:"
+            }
+          },
+          {
+            "type": "divider"
+          },
+          {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": "I am an Agentic AI System that performs reflection and utilises a datastore and multiple calls to a language model to improve the quality of answers."
+            }
+          }
+        ]
+      }
+    )
 
-#def metric(example, pred, trace=None):
+  except Exception as e:
+    logger.error(f"Error publishing home tab: {e}")
 
-#    engaging = "Does the assessed text make for a self-contained, engaging tweet?"
-#    correct = f"The text should answer `{example.question}` with `{pred}`. Does the assessed text contain this answer?"
-    
-#    print("correct",correct)
-
-#    with dspy.context(lm=watsonx):
-#        correct =  dspy.Predict(Assess)(assessed_text=pred, assessment_question=correct)
-#        engaging = dspy.Predict(Assess)(assessed_text=pred, assessment_question=engaging)
-
-#    correct, engaging = [m.assessment_answer.lower() == 'yes' for m in [correct, engaging]]
-#    score = (correct + engaging) if correct and (len(example.question) <= 280) else 0
-
-#    if trace is not None: return score >= 2
-#    return score / 2.0
-
-# Validation logic: check that the predicted answer is correct.
-# Also check that the retrieved context does actually contain that answer.
-def validate_context_and_answer(example, pred, trace=None):
-    answer_EM = dspy.evaluate.answer_exact_match(example, pred)
-    answer_PM = dspy.evaluate.answer_passage_match(example, pred)
-    return answer_EM and answer_PM
-
-# Set up a basic teleprompter, which will compile our RAG program.
-teleprompter = BootstrapFewShot(metric=validate_context_and_answer)
-
-dataset = HotPotQA(train_seed=1, train_size=20, eval_seed=2023, dev_size=50, test_size=0)
-# Tell DSPy that the 'question' field is the input. Any other fields are labels and/or metadata.
-trainset = [x.with_inputs('question') for x in dataset.train]
-devset = [x.with_inputs('question') for x in dataset.dev]
-len(trainset), len(devset)
-
-print(trainset)
-
-# 2. Recompile the RAG program
-compiled_rag = teleprompter.compile(student=RAG(), trainset=trainset)
-
-# Compiled module prediction
-answer = dspy.Predict(GenerateAnswer)(context="", question="How do I go about designing an ecosystems architecture?")
-print(answer)
-
-#watsonx.inspect_history(n=3)
-
-#response = tweepty_client.create_tweet(
-#    text="This Tweet was Tweeted using Tweepy and Twitter API v2!"
-#)
-#print(f"https://twitter.com/user/status/{response.data['id']}")
-
-#dspy.candidate_programs
-
+# Ready? Start your app!
+if __name__ == "__main__":
+    app.start(port=int(os.environ.get("PORT", 3000)))
