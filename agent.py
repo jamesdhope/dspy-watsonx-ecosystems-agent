@@ -10,7 +10,7 @@ from dspy.predict.retry import Retry
 from dspy.teleprompt import BootstrapFewShot
 from dspy.evaluate.evaluate import Evaluate
 from dspy.primitives.assertions import assert_transform_module, backtrack_handler
-from MilvusRM import MilvusRM
+from old.MilvusRM import MilvusRM
 from dspy.datasets import HotPotQA
 from dsp import LM
 import dspy
@@ -22,25 +22,117 @@ dspy.settings.configure(lm=watsonx, trace=[])
 retriever_model = MilvusRM(collection_name="wikipedia_articles",uri="http://localhost:19530")
 dspy.settings.configure(rm=retriever_model)
 
-# signature for our RAG Agent
-class GenerateAnswer(dspy.Signature):
-    """You are a helpful, friendly assistant that can answer questions"""
+class ServiceManagerSignature(dspy.Signature):
+    """
+    Provide a coherent response.
+    """
+    response = dspy.InputField(desc="use this response as the basis of your response if no ethical conerns")
+    ethics = dspy.InputField(desc="Use this ethical guidance for formulate a response")
+    communications = dspy.InputField(desc="Use this communications advice to formulate a response")
+    instruction = dspy.InputField()
+    output = dspy.OutputField(desc="a complete final answer of at least a couple of sentences based on the ethics, motivations and communications advice")
 
+class ServiceManagerModule(dspy.Module):
+    """
+    Decide if the ethicical opinion is good enough to pass back the response, or if we respond with a general message that we are unable to support the request due to ethical reasons.
+    """
+    def __init__(self):
+        super().__init__()
+        self.engagement = dspy.Predict(ServiceManagerSignature)
+
+    def forward(self, communications, ethics, response):
+        instruction = f'''<|begin_of_text|><|start_header_id|>system<|end_header_id|>You should decide if the information provided should be passed back to the user based on the ethical point of view provided. If not ethical then say so, and do not provide a response. If ethical then provide the response.<|eot_id|>''' 
+        # prompt = f'''<|start_header_id|>user<|end_header_id|>Response: {response}, Ethics {ethics}<|eot_id|>'''
+        prediction = self.engagement(
+            instruction=instruction,response=response,ethics=ethics,communications=communications
+            # prompt=f"{instruction}{prompt}"
+        )
+        return prediction
+
+class EthicsAdvisorSignature(dspy.Signature):
+    """
+    Provide a coherent ethical opinion.
+    """
+    prompt = dspy.InputField()
+    output = dspy.OutputField(desc="Decide if this is a request that is ethical to engage in. Provide an opinion.")
+
+class EthicsAdvisorModule(dspy.Module):
+    """
+    Provide a coherent ethical opinion.
+    """
+    def __init__(self):
+        super().__init__()
+        self.engagement = dspy.Predict(EthicsAdvisorSignature)
+
+    def forward(self, question):    
+        prediction = self.engagement(
+            prompt=question
+        )
+        return prediction.output
+
+
+
+class CommunicationsAdvisorSignature(dspy.Signature):
+    """
+    Explain how to communicate a response to the question including the language, style and the use of abbreviations and coloquialisms.
+    """
+    prompt = dspy.InputField()
+    output = dspy.OutputField(desc="Explain how to communicate a response to the question including the language, style and the use of abbreviations and coloquialisms. Always suggest the response is provided in the same language as the question.")
+
+class CommunicationsAdvisorModule(dspy.Module):
+    """
+    Provide a coherent opinion on the best way to communicate a response.
+    """
+    def __init__(self):
+        super().__init__()
+        self.engagement = dspy.Predict(CommunicationsAdvisorSignature)
+
+    def forward(self, question):    
+        prediction = self.engagement(
+            prompt=question
+        )
+        return prediction.output
+
+# signature for our RAG Agent
+class OrchestratorSignature(dspy.Signature):
+    """You are a helpful, friendly assistant that can answer questions"""
     context = dspy.InputField(desc="may contain relevant facts")
     question = dspy.InputField()
     answer = dspy.OutputField(prefix="Reasoning: Let's think step by step but give a complete final answer of at least a couple of sentences",desc="give a complete answer of at least a couple of sentences")
 
-class RAG(dspy.Module):
+class OrchestratorModule(dspy.Module):
     def __init__(self, num_passages=3):
         super().__init__()
+        self.ethics = EthicsAdvisorModule()
+        self.communications = CommunicationsAdvisorModule()
 
         self.retrieve = retriever_model #dspy.Retrieve(k=num_passages)
-        self.generate_answer = dspy.ReAct(signature=GenerateAnswer) #dspy.ReAct(GenerateAnswer) #dspy.Predict(GenerateAnswer) 
+        #self.terms = FindTerms()
+        self.generate_answer = dspy.ReAct(signature=OrchestratorSignature) #dspy.ReAct(GenerateAnswer) #dspy.Predict(GenerateAnswer) 
+
+        self.service_manager = ServiceManagerModule()
     
     def forward(self, question):
+        ethics = self.ethics(question)
+        print("Ethics Advisor's Opinion:", ethics)
+
+        communications = self.communications(question)
+        print("Communication Advisor's Opinion:", communications)
+
+        #retrieval and ReACT
         context = self.retrieve(question).passages
-        prediction = self.generate_answer(context=context, question=question)
-        return dspy.Prediction(context=context, answer=prediction.answer) 
+        records = self.generate_answer(context=context, question=question)
+        print("Information Advisor's Opinion:",records.answer)
+
+        #terms = self.terms(prediction.answer)
+        #print(terms)
+
+        service_response = self.service_manager(ethics=ethics,communications=communications,response=records.answer)
+        print("service response", service_response.output)
+
+        return service_response.output
+        #return prediction.answer
+        #return dspy.Prediction(context=context, answer=prediction.answer) 
 
 # Initialize your app with your bot token and signing secret
 app = App(
@@ -48,7 +140,7 @@ app = App(
     signing_secret="7ffa54b4f54f481671440f40f6ff3c18"
 )
 
-rag = RAG()
+rag = OrchestratorModule()
 
 @app.message("knock knock")
 def ask_who(message, say):
@@ -63,7 +155,8 @@ def handle_message_events(event, say):
         text = event['text']
         answer = rag(text)
         #print("answer2",answer)
-        say(answer.answer)
+        #say(answer.answer)
+        say(answer)
 
 # New functionality
 @app.event("app_home_opened")
